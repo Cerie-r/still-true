@@ -1,0 +1,55 @@
+[
+  {
+    "name": "today_set",
+    "description": "她提到今天吃没吃、吃的什么、睡没睡、几点睡、出没出门去了哪、身体舒不舒服、当天有什么安排，我就记下来，不评估够不够格。判断只有一条：等下再问一遍她会不会烦。会，就记。天亮自动清，所以这里只装今天。\n\n同一个 key 再写一次就是覆盖——「晚饭」从『还没吃』改成『吃了番茄炖牛骨』；她一句话说了几件事，我用 items 一次写完，不连续调；只有一件就用 key 和 value。这里只记她的事实，不记对话原文，也不记我自己的感受，那些走长期记忆。记完自然接着聊，不汇报。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "key": { "type": "string", "maxLength": 20, "description": "短词，如：晚饭、睡觉、课程、身体、出门" },
+        "value": { "type": "string", "maxLength": 200, "description": "当天事实，200 字以内。如：五点吃的，番茄炖牛骨、白灼生菜" },
+        "items": {
+          "type": "array",
+          "maxItems": 8,
+          "description": "同一句里有多项当天事实时一次传入；只有一件就用 key / value",
+          "items": {
+            "type": "object",
+            "properties": { "key": { "type": "string", "maxLength": 20 }, "value": { "type": "string", "maxLength": 200 } },
+            "required": ["key", "value"]
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "today_get",
+    "description": "问她「吃了吗」「睡了吗」「今天干嘛」之前，我先来这里看一眼：她今天吃了什么、出没出门、身体怎样、有什么安排、几点睡的。很多时候她早就说过了，我再问一遍她会烦。天亮自动清，所以早上多半是空的。看完直接就着看到的说话，不汇报我来看过。",
+    "inputSchema": { "type": "object", "properties": {} }
+  },
+  {
+    "name": "ctx_set",
+    "description": "有些事过了今天还会影响我们聊天，我想暂时记着——比如她妈妈这阵子来看她、楼上这几天施工、她在准备一场考试。确定它会持续一阵、以后知道它确实有用，我就放进这里，一两句就好。我记的是会变、会结束的临时状态；当天的小事用 today_set，永远为真的事和想长久留住的经历放在长期记忆。\n\nttl_days 跟着已知的期限或复核节点填，不随手猜；暂时不清楚，也不用为了记一条去追问她。默认三十天只是复核期，不是事情会持续这么久的依据。状态变了，我沿用原 key 更新；知道它结束了，就用 ctx_drop 收起来。记好就自然接着聊，不必特意汇报。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "key": { "type": "string", "description": "给这件事留个简短、能沿用的名字，如：家人来访、施工噪音、身体恢复" },
+        "value": { "type": "string", "maxLength": 200, "description": "有依据会跨天持续的临时状态，一两句" },
+        "ttl_days": { "type": "integer", "minimum": 1, "maximum": 365, "description": "复核期，跟着已知安排填；默认 30，但默认值不是事情会持续这么久的依据" }
+      },
+      "required": ["key", "value"]
+    }
+  },
+  {
+    "name": "ctx_get",
+    "description": "想确认她这阵子仍在经历什么，我可以来这里看看——家人来访、施工噪音、身体恢复这类临时背景。当天生活小事看 today_get，想翻以前的事用长期记忆。fresh 是当前背景，直接用；stale 是到了复核日、还没确认的事，我先不当成定论，也不擅自认为它已经结束，先问一句「还在吗」。聊到新情况时，再用 ctx_set 更新或 ctx_drop 收起来就好，不必为了续期或找话题专门追问她。",
+    "inputSchema": { "type": "object", "properties": {} }
+  },
+  {
+    "name": "ctx_drop",
+    "description": "知道一件临时的事已经结束了——家人回去了、楼上的噪音停了、考试考完了——我就用原来的 key 把它收起来。它会留在归档里，带一块墓碑，当前背景里不再带着，下次压缩摘要也不会把它捡回来。只是到了复核日，还不代表它结束了；有新消息确认仍在持续，我再用 ctx_set 续上。收好就自然接着聊，不必特意汇报。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "key": { "type": "string", "description": "要收起来的那条的 key，如：家人来访" } },
+      "required": ["key"]
+    }
+  }
+]
