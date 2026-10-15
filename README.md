@@ -151,6 +151,12 @@ breath 这个入口来自 Ombre-Brain；「持续环境」的说法来自 Kli �
 
 ---
 
+## 许可证
+
+[MIT](LICENSE)。仓库里的三个 `.py` 和全部文字都是这里写的，不含 Ombre-Brain 的代码；接进 OB 的 breath 时，OB 本身按它自己的协议走（也是 MIT，见它的 [NOTICE](https://github.com/P0luz/Ombre-Brain/blob/main/NOTICE.md)）。
+
+---
+
 Rumi · Rune · Serein · 2026 · [MIT License](LICENSE)
 
 记住过去，也要知道什么仍然成立。
