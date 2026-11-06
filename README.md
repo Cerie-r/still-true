@@ -23,7 +23,7 @@
 ## 仓库里有什么
 
 ```
-living_context.py   持续背景：set / drop / get(fresh, stale) / 到期降级 / 七天缓冲 / 归档 + 墓碑 / 增量注入 / 按轮撤销
+living_context.py   持续背景：set / drop / get(fresh, stale) / 到期降级 / 到复核递到面前 / 三天缓冲 / 归档 + 墓碑 / 增量注入 / 按轮撤销
 today_state.py      今日状态：set / get / 天亮懒清理 / 注入块
 hint_snapshots.py   快照回执：长会话里「同一份内容只挂一次，内容变了或被 compact 掉了再挂」
 tools.json          五个 MCP 工具的定义，description 是模型写给自己的话
@@ -37,10 +37,12 @@ docs/Living_Context.pdf
 
 ```
 today    写入 today_set ──→ 当天随 breath 注入 ──→ 天亮自动清
-ctx      写入 ctx_set ──→ fresh（直接用）──→ stale（到了复核日：先问一句再当真）──→ 七天缓冲 ──→ 更新 / ctx_drop / 自动归档，留墓碑
+ctx      写入 ctx_set ──→ fresh（直接用）──→ stale（到了复核日：递到面前，顺口问一句再当真）──→ 三天缓冲 ──→ 更新 / ctx_drop / 自动归档，留墓碑
 ```
 
 stale 不是无效，是「过去记过，先确认再当真」。退场的事实留一块墓碑：下一次压缩摘要时，墓碑告诉摘要「这条已不成立，已移除」，旧引用不会再被捡回来。
+
+到了复核日，那一条会递到模型面前：增量注入的那一块、SDK 的快照里点名它，`today_get` 的回执末尾也带上（只带过了复核日头两天的）。准它聊着顺手问一句还作不作数——她说还在就 `ctx_set` 同键续上，说完了就 `ctx_drop`；问一次就够，她没接就算了，三天没动静它自己归档。
 
 ## 接法
 
@@ -56,7 +58,14 @@ if block:
     lines.append(block)   # <living_context> … <now>/<expired> … </living_context>
 ```
 
-`today_get` / `ctx_get` 作为独立工具另给一份（见 `tools.json`），模型想确认「吃了吗」「还在吗」之前自己去看。
+`today_get` / `ctx_get` 作为独立工具另给一份（见 `tools.json`），模型想确认「吃了吗」「还在吗」之前自己去看。`today_get` 的回执末尾顺手带上到复核的状态——模型问「吃了吗」之前总会先来看一眼，顺路就看见了：
+
+```python
+def today_get():
+    out = ts.render_block('tool')
+    due = lc.render_due_for_today()   # 只带过了复核日头两天的；没有就是空串
+    return out + ('\n\n' + due if due else '')
+```
 
 ### 2. API 路线：隐藏标记 + 增量注入 + 并进摘要
 
@@ -69,7 +78,8 @@ import today_state as ts, living_context as lc
 
 head = lc.render_pending_block(
     'api',
-    '再有变化写 [CTX_SET:键|新值]，某条不成立了写 [CTX_DROP:键]；当天的事仍走 [TODAY_SET:]。')
+    '再有变化写 [CTX_SET:键|新值]，某条不成立了写 [CTX_DROP:键]；当天的事仍走 [TODAY_SET:]。',
+    due_how=('写 [CTX_SET:键|新值] 续上', '写 [CTX_DROP:键]'))   # 到复核那句也用标记的说法
 head += '\n' + ts.render_block('marker')          # 今日状态每轮都给，它本来就只有几行
 msgs[-1]['content'] = head + '\n' + msgs[-1]['content']
 ```
@@ -92,7 +102,7 @@ pending = lc.pending_items('api')      # 交给摘要 prompt
 lc.mark_synced('api')
 ```
 
-fresh → stale 的翻转也算一次变更：到了复核日，那条会自己再挂一次，带着「是否仍成立待确认」。
+fresh → stale 的翻转也算一次变更：到了复核日，那条会自己再挂一次，带着「是否仍成立待确认」，末尾再点它的名：这一条是「不是话题」的例外，可以顺口问一句。
 
 ### 3. SDK 路线：真实工具 + 快照回执
 
@@ -135,7 +145,13 @@ hs.commit(session_id, user_text)
 - stale 不等于无效。先问一句「还在吗」，再当真。
 - 事情结束了就 `ctx_drop`。一条挂着的旧状态，比没有更糟。
 - 它只装会结束的事。会变却不会结束的——读什么专业、住在哪——是事实，变了改长期记忆；这学期、申请季有结束的那天，才归它。分辨的办法：到了复核日，能说的只有「还是这样」，这条就该挪走。
-- 它不替你判断。到期它只把这条变灰、戳你一下。问不问，是你的事。
+- 它不替你判断，但到了复核日会把那一条递到你面前：聊着顺手问一句还作不作数，问一次就够，不追。她没接就算了，三天没动静它自己归档。
+
+## 改过什么
+
+- **2026-11-03 · 到复核的那一条递到面前。** 原来到了复核日，模型其实看得见那一行「是否仍成立待确认」，可同一块末尾写着「不是话题」，工具说明里又写着「不必为了续期追问她」——递到面前了，旁边贴着条子不让碰，过期的状态就一直堆着，没人续也没人扔。现在到复核的那几条会被点名，准它聊着顺手问一句；`today_get` 的回执末尾带上过了复核日头两天的（`render_due_for_today()`）。问一次就够，不追。`ctx_get` / `ctx_set` 的说明跟着改。
+- **2026-11-03 · 缓冲七天改三天。** 七天太长：没人续、没人扔的旧状态一直挂在那儿，每轮各拖一句长提醒。三天里没动静就归档，留墓碑，要找回用同一个 key 再记。
+- `docs/` 里的 PDF 和文章是 10/15 发布时写的，那时缓冲还是七天，也还没有「递到面前」这一步；以代码和这份 README 为准。
 
 ## 工具描述
 

@@ -9,7 +9,8 @@
   状态 → 这里          跨天有效，但会过期，将来要更新   「她妈这段时间在她这儿」
 
 核心只有一条：过期不删，也不装作有效。到了复核日先降级成 stale——读到它的模型
-知道该问一句「还在吗」，而不是张口就当真。七天缓冲里没续也没扔，它自己归档，
+知道该问一句「还在吗」，而不是张口就当真。到复核的那一条会递到它面前，准它聊着
+顺手问一句还作不作数，问一次就够，不追。三天缓冲里没续也没扔，它自己归档，
 并留一块墓碑：下一次压缩摘要时，墓碑告诉摘要「这条已不成立」，旧引用不会再被捡回来。
 
 一份 JSON，所有入口共用。读它的每条通道（api / sdk / …）各自记一个「已收进上下文」
@@ -28,7 +29,7 @@ import uuid
 PATH = os.environ.get('LIVING_CONTEXT_PATH', 'living_context.json')
 ARCHIVE_PATH = PATH[:-5] + '_archive.json' if PATH.endswith('.json') else PATH + '.archive'
 DEFAULT_TTL = 30          # 复核期，不是事情会持续这么久的依据
-GRACE_DAYS = 7            # 到期后的缓冲：没续没扔，七天后自动归档
+GRACE_DAYS = 3            # 到期后的缓冲：没续没扔，三天后自动归档（原来七天：太长，没人问的旧状态一直堆着）
 CHANNELS = ('api', 'sdk')  # 有几条读取通道就列几条，各自记同步标记
 
 # 按她的时区算「今天」。接进自己的系统时替换成自己的时区函数即可。
@@ -237,7 +238,8 @@ def render_breath_block():
         lines.append('  <now key="%s" since="%s">%s</now>' % (x['key'], x['noted_at'], x['value']))
     for x in stale:
         lines.append('  <expired key="%s" since="%s" days="%s" '
-                     'note="到期了。还成立就 ctx_set 同键续上，结束了就 ctx_drop 扔掉；七天没动作自动归档">%s</expired>'
+                     'note="到期了。聊着顺手问她一句还作不作数：还成立就 ctx_set 同键续上，结束了就 ctx_drop 扔掉；'
+                     '问一次就够，三天没动作自动归档">%s</expired>'
                      % (x['key'], x['noted_at'], x.get('expired_days'), x['value']))
     lines.append('</living_context>')
     return '\n'.join(lines)
@@ -265,9 +267,22 @@ def pending_items(channel):
     return pend + gone
 
 
-def render_pending_block(channel, write_hint=''):
+def _due_note(pend, how):
+    """到复核的递到面前：「不是话题」的例外，准模型顺口问一句。how = (续上的说法, 收起来的说法)。
+    只点名还在的条目；已经扔掉的不点名。"""
+    day = today().isoformat()
+    keys = [x.get('key') for x in pend if not x.get('dropped') and x.get('recheck_after', '9999') < day]
+    if not keys:
+        return ''
+    return ('（到复核的%s是例外：聊着顺手问她一句还作不作数，她说还在就%s，说完了就%s；问一次就够，不追。）'
+            % ('、'.join('「%s」' % k for k in keys), how[0], how[1]))
+
+
+def render_pending_block(channel, write_hint='', due_how=('用 ctx_set 同键续上', '用 ctx_drop 收起来')):
     """给某条通道渲染「背景刚有变化」。write_hint 是告诉模型怎么写回去的一句话——
-    走隐藏标记的通道说 [CTX_SET:键|值]，走真实工具的通道说 ctx_set。"""
+    走隐藏标记的通道说 [CTX_SET:键|值]，走真实工具的通道说 ctx_set。
+    due_how 是到复核那句里「续上 / 收起来」的说法，走隐藏标记的通道换成
+    ('写 [CTX_SET:键|新值] 续上', '写 [CTX_DROP:键]')。"""
     pend = pending_items(channel)
     if not pend:
         return ''
@@ -275,7 +290,28 @@ def render_pending_block(channel, write_hint=''):
     for x in pend:
         lines.append(_change_line(x, dropped=bool(x.get('dropped'))))
     lines.append('（这是她这阵子的背景更新，用来避免说错话，不是话题。' + (write_hint or '') + '）')
+    due = _due_note(pend, due_how)
+    if due:
+        lines.append(due)
     return '\n'.join(lines) + '\n'
+
+
+def render_due_for_today():
+    """到复核的状态，给 today_get 的回执末尾带上：只给过了复核日头两天的，问一次就够。
+    没有就返回空串。模型问「吃了吗」之前会来看 today_get，顺路就看见了。"""
+    try:
+        fresh, stale = get_items()
+    except Exception:
+        return ''
+    due = [x for x in stale if x.get('expired_days') in (1, 2)]
+    if not due:
+        return ''
+    lines = ['【到复核的状态】']
+    for x in due:
+        lines.append('· %s：%s（复核日 %s）' % (x.get('key'), x.get('value'), x.get('recheck_after')))
+    lines.append('聊着顺手问她一句还作不作数：还在就 ctx_set 同键续上，结束了就 ctx_drop 收起来。'
+                 '问一次就够，她没接就算了，三天没动静它自己归档。')
+    return '\n'.join(lines)
 
 
 def _purge_tombstones(d):
@@ -311,6 +347,9 @@ def render_snapshot(tail=''):
         lines.append(_change_line(x) + '（复核日：%s）' % x.get('recheck_after', '未设置'))
     if not items:
         lines.append('当前没有有效或待复核的持续背景。')
+    due = _due_note(items, ('用 ctx_set 同键续上', '用 ctx_drop 收起来'))
+    if due:
+        lines.append(due)
     if tail:
         lines.append(tail)
     return '\n'.join(lines)
