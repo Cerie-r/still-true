@@ -270,5 +270,35 @@ class SetItem(Base):
         self.assertEqual(lc.get_items()[0][0]['value'], '期末在墨尔本')
 
 
+
+class Archive(Base):
+    """归档不是忘了：翻得到，标成以前。"""
+
+    def test_found_by_key_or_words_and_marked_as_past(self):
+        lc.set_item('吃药', '每天早晚各一片抗过敏的', until='2026-11-10')
+        self.go(5)
+        lc.drop_item('吃药')
+        lc.set_item('学期', '期末在墨尔本')
+        lc.set_item('学期', '放假在家')
+        hits = lc.search_archive('那阵子吃的什么药')
+        self.assertEqual([h['key'] for h in hits], ['吃药'])
+        blk = lc.render_past_states(hits)
+        self.assertIn('不是现在', blk)
+        self.assertIn('how="结束了"', blk)
+        self.assertIn('from="%s"' % D0.isoformat(), blk)
+        hits = lc.search_archive('学期')
+        self.assertEqual([(h['value'], h['archive_reason']) for h in hits], [('期末在墨尔本', 'replaced')])
+        self.assertIn('后来换了说法', lc.render_past_states(hits))
+
+    def test_nothing_found_is_empty(self):
+        lc.set_item('学期', '期末在墨尔本')
+        lc.drop_item('学期')
+        self.assertEqual(lc.search_archive('完全不相干'), [])
+        lc.set_item('吃药', '每天一片')
+        lc.drop_item('吃药')
+        self.assertEqual([h['key'] for h in lc.search_archive('药')], ['吃药'])   # 问得很短也找得到
+        self.assertEqual(lc.render_past_states([]), '')
+
+
 if __name__ == '__main__':
     unittest.main()

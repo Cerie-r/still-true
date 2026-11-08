@@ -25,6 +25,7 @@ import functools
 import io
 import json
 import os
+import re
 import threading
 import uuid
 
@@ -489,6 +490,70 @@ def render_snapshot(tail=''):
         lines.append(due)
     if tail:
         lines.append(tail)
+    return '\n'.join(lines)
+
+
+# ─────────────── 归档不是忘了：翻得到，但标成「以前」 ───────────────
+
+_PUNCT = re.compile(r'[\s，。、,.!?！？「」"\'：:；;（）()·]+')
+
+
+def _bigrams(s):
+    s = _PUNCT.sub('', str(s or ''))
+    return {s[i:i + 2] for i in range(len(s) - 1)}
+
+
+def search_archive(query, limit=3):
+    """在归档里找以前的处境（扔掉的、换掉的、到期收起来的），给 recall 用：翻得到，交出去的时候标成「以前」。
+    怎么算碰上：键的字全在她问的话里（「吃药」之于「那阵子吃的什么药」）；或者两个字两个字地比，碰上的够多，
+    键上的分量重；问得很短（「药」）就看键里有没有这个字。分一样就新的在前，同一句只给一次。"""
+    qs = _PUNCT.sub('', str(query or ''))
+    if not qs or not os.path.exists(ARCHIVE_PATH):
+        return []
+    try:
+        with io.open(ARCHIVE_PATH, encoding='utf-8') as f:
+            arc = json.load(f).get('items', [])
+    except Exception:
+        return []
+    qb, qc = _bigrams(qs), set(qs)
+    scored = []
+    for x in arc:
+        k = _PUNCT.sub('', str(x.get('key') or ''))
+        kc = set(k)
+        score = len(qb & _bigrams(x.get('value'))) + 2 * len(qb & _bigrams(k))
+        if len(kc) >= 2 and kc <= qc:
+            score += 3
+        elif len(qs) <= 2 and qc & kc:
+            score += 2
+        if score >= 2:
+            scored.append((score, x.get('archived_at', ''), x))
+    scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    out, seen = [], set()
+    for _, _, x in scored:
+        sig = (x.get('key'), x.get('value'))
+        if sig in seen:
+            continue
+        seen.add(sig)
+        out.append(x)
+        if len(out) >= limit:
+            break
+    return out
+
+
+_PAST_HOW = {'replaced': '后来换了说法', 'dropped': '结束了', 'closed': '结束了',
+             'expired': '到期没核实，收起来了，不代表结束'}
+
+
+def render_past_states(items):
+    """把翻到的旧处境渲染成一小段，接在 recall 结果后面：从哪天到哪天、怎么收起来的。没有就返回空串。"""
+    if not items:
+        return ''
+    lines = ['<past_states note="她以前的处境，已经收起来了，不是现在。她问起那阵子再用；现在怎样，看 living_context 或者问她">']
+    for x in items:
+        lines.append('  <past key="%s" from="%s" to="%s" how="%s">%s</past>' % (
+            x.get('key', ''), x.get('noted_at', ''), x.get('archived_at', ''),
+            _PAST_HOW.get(x.get('archive_reason'), x.get('archive_reason', '')), x.get('value', '')))
+    lines.append('</past_states>')
     return '\n'.join(lines)
 
 
