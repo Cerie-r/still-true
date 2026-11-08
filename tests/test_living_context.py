@@ -229,5 +229,46 @@ class Sync(Base):
         self.assertEqual(lc.pending_items('api'), [])
 
 
+
+class SetItem(Base):
+    """一件一行：还在只传 key；变了丢旧建新；until 写日子。"""
+
+    def test_key_only_renews_and_keeps_the_sentence(self):
+        lc.set_item('考试', '在准备期末', ttl_days=3)
+        self.go(10)
+        lc.set_item('考试')                                  # 她说还在
+        fresh, stale = lc.get_items()
+        x = fresh[0]
+        self.assertEqual((x['value'], x['noted_at']), ('在准备期末', D0.isoformat()))
+        self.assertEqual(x['recheck_after'], (self.day + datetime.timedelta(days=30)).isoformat())
+        self.assertFalse(os.path.exists(lc.ARCHIVE_PATH))
+
+    def test_new_sentence_retires_the_old_one(self):
+        lc.set_item('学期', '期末在墨尔本')
+        self.go(12)
+        lc.set_item('学期', '放假在家')
+        fresh, stale = lc.get_items()
+        self.assertEqual((fresh[0]['value'], fresh[0]['noted_at']), ('放假在家', self.day.isoformat()))
+        with open(lc.ARCHIVE_PATH, encoding='utf-8') as f:
+            arc = json.load(f)['items']
+        self.assertEqual([(a['value'], a['archive_reason']) for a in arc], [('期末在墨尔本', 'replaced')])
+
+    def test_until_is_a_date(self):
+        lc.set_item('学期', '期末在墨尔本', until='2026-11-13')
+        self.assertEqual(lc.get_items()[0][0]['recheck_after'], '2026-11-13')
+        lc.set_item('学期', until='2020-01-01')              # 早于今天就不认，照 ttl 算
+        self.assertEqual(lc.get_items()[0][0]['recheck_after'], (D0 + datetime.timedelta(days=30)).isoformat())
+
+    def test_key_only_needs_an_existing_line(self):
+        with self.assertRaises(ValueError):
+            lc.set_item('没记过的')
+
+    def test_undo_brings_the_old_sentence_back(self):
+        lc.set_item('学期', '期末在墨尔本')
+        lc.set_item('学期', '放假在家', source_turn='t1', source_session='s1')
+        lc.undo_turn_writes('t1', 's1')
+        self.assertEqual(lc.get_items()[0][0]['value'], '期末在墨尔本')
+
+
 if __name__ == '__main__':
     unittest.main()

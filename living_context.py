@@ -107,25 +107,48 @@ def _age(iso, day):
 
 # ───────────────────────── 写 ─────────────────────────
 
+def _until(until, day):
+    """until 写的那天（YYYY-MM-DD）；读不出来、或早于今天，就当没写。最远一年。"""
+    try:
+        u = datetime.date.fromisoformat(str(until or '').strip().replace('/', '-'))
+    except Exception:
+        return None
+    if u < day:
+        return None
+    return min(u, day + datetime.timedelta(days=365))
+
+
 @_locked
-def set_item(key, value, ttl_days=DEFAULT_TTL, said_by='', source_turn='', source_session=''):
-    """记一条持续状态。同 key 覆盖（并刷新记录时间与复核期），不另建重复项。"""
+def set_item(key, value='', ttl_days=DEFAULT_TTL, said_by='', source_turn='', source_session='', until=''):
+    """记一条她这阵子的处境，一件一行。
+    - 只给 key（value 空）：她说还在——原话不动，从哪天开始的也不动，只把复核日往后推。
+    - 给了新的一句、跟原来不一样：丢旧建新——旧的那句收进归档（reason='replaced'），新的一句从今天记起。
+      不在原话上改，免得新旧搅在一起。
+    - 同一句：当续期。
+    until：知道的那天（YYYY-MM-DD），过了那天它递回来问；比 ttl_days 优先。"""
     key = str(key or '').strip()
     value = str(value or '').strip()
-    if not key or not value:
-        raise ValueError('ctx key/value must not be empty')
+    if not key:
+        raise ValueError('ctx key must not be empty')
     ttl_days = max(1, min(365, int(ttl_days or DEFAULT_TTL)))
     d = load()
-    before = copy.deepcopy(next((x for x in d.get('items', []) if x.get('key') == key), None))
+    old = next((x for x in d.get('items', []) if x.get('key') == key), None)
+    if not value:
+        if old is None:
+            raise ValueError('没有「%s」这条；新记一条，要写一句她现在的情况' % key)
+        value = old.get('value', '')
+    before = copy.deepcopy(old)
+    renew = old is not None and old.get('value') == value
     revision = uuid.uuid4().hex
     day = today()
+    due = _until(until, day) or (day + datetime.timedelta(days=ttl_days))
     items = [x for x in d.get('items', []) if x.get('key') != key]
     items.append({
         'key': key,
         'value': value,
-        'noted_at': day.isoformat(),
-        'recheck_after': (day + datetime.timedelta(days=ttl_days)).isoformat(),
-        'said_by': said_by,
+        'noted_at': (old.get('noted_at') if renew else '') or day.isoformat(),
+        'recheck_after': due.isoformat(),
+        'said_by': said_by or ((old or {}).get('said_by', '') if renew else ''),
         'synced': _unsynced(),
         '_status': 'fresh',
         '_write_revision': revision,
@@ -139,6 +162,8 @@ def set_item(key, value, ttl_days=DEFAULT_TTL, said_by='', source_turn='', sourc
             'day': day.isoformat(),
         })
     save(d)
+    if old is not None and not renew:
+        _archive([old], 'replaced')
     return d['items'][-1]
 
 
