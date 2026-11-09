@@ -174,8 +174,18 @@ def _until(until, day):
     return min(u, day + datetime.timedelta(days=365))
 
 
+class SimilarLine(ValueError):
+    """新开一行，撞上了像是同一件事的旧行：先不写，把像的那几行递回去让模型定。
+    str() 就是给模型看的那句；.similar 是那几行（挂着的，和归档里同名的）。
+    是同一件 → 写回那个 key（旧的那句自己归档，这就是「情况变了」）；确定是另一件 → force_new=True 再写一次。"""
+
+    def __init__(self, key, value, similar):
+        self.key, self.value, self.similar = key, value, similar
+        super().__init__(render_similar_note(self))
+
+
 @_locked
-def set_item(key, value='', ttl_days=None, said_by='', source_turn='', source_session='', until=''):
+def set_item(key, value='', ttl_days=None, said_by='', source_turn='', source_session='', until='', force_new=False):
     """记一条她这阵子的处境，一件一行。
     - 只给 key（value 空）：她说还在——原话不动，从哪天开始的也不动，只把复核日往后推。
     - 给了新的一句、跟原来不一样：丢旧建新——旧的那句收进归档（reason='replaced'），新的一句从今天记起。
@@ -184,7 +194,9 @@ def set_item(key, value='', ttl_days=None, said_by='', source_turn='', source_se
     复核日：until 写的那天（YYYY-MM-DD）优先。没给新的 until、原来记的那天还没到，就还按那天——她随口一句
     「还在上课」不该把回国那天冲掉。都没有才按 ttl_days（默认 30）：从今天起满这么多天递回来问，
     recheck_after 存的是最后一个不用问的日子。
-    新开一行时，回执里顺手点出已经挂着的里头像是同一件事的（similar）；写不写回那个 key，模型自己定。"""
+    新开一行（这个 key 还没有）时先看一眼：挂着的里头、或者归档里最近收起来的，有像是同一件事的，就先不写，
+    抛 SimilarLine 把那几行递回去——是同一件就写回那个 key，确定是另一件就 force_new=True 再来。
+    跟 remember 一个路子：有像的先提一句，再写。"""
     key = str(key or '').strip()
     value = str(value or '').strip()
     if not key:
@@ -195,6 +207,10 @@ def set_item(key, value='', ttl_days=None, said_by='', source_turn='', source_se
         if old is None:
             raise ValueError('没有「%s」这条；新记一条，要写一句她现在的情况' % key)
         value = old.get('value', '')
+    if old is None and not force_new:
+        sim = similar_lines(key, value, d.get('items', []))
+        if sim:
+            raise SimilarLine(key, value, sim[:SIMILAR_MAX])
     before = copy.deepcopy(old)
     renew = old is not None and old.get('value') == value
     revision = uuid.uuid4().hex
@@ -230,20 +246,17 @@ def set_item(key, value='', ttl_days=None, said_by='', source_turn='', source_se
     save(d)
     if old is not None and not renew:
         _archive([old], 'replaced')
-    out = dict(item)
-    if old is None:
-        sim = similar_lines(key, value, others)
-        if sim:
-            out['similar'] = [{'key': x.get('key'), 'value': x.get('value'), 'noted_at': x.get('noted_at', '')}
-                              for x in sim[:SIMILAR_MAX]]
-    return out
+    return item
 
 
-def similar_lines(key, value, items):
-    """新开一行之前看一眼：已经挂着的里头，有没有像是同一件事的。两个字两个字地比键和句子，键上碰到的分量重；
-    键上有同一个字（虚字不算）也算碰上。碰上一点就点出来，让模型自己定——多提一句不要紧，两行打架才麻烦。
-    按像的程度排，一样像的新的在前。"""
+def similar_lines(key, value, items, archive_days=60):
+    """新开一行之前看一眼，有没有像是同一件事的：
+    - 挂着的几行：两个字两个字地比键和句子，键上碰到的分量重；键上有同一个字（虚字不算）也算。
+    - 归档里最近 archive_days 天收起来的（结束了的、到期的；换过说法的不算，它的 key 多半还活着）：只比键。
+      妈妈上个月来住过、这个月又来了，沿用「家人来访」那个 key，归档里才是一条线。
+    碰上一点就算，让模型自己定——多提一句不要紧，两行打架才麻烦。按像的程度排，一样像的新的在前。"""
     kb, vb, kc = _bigrams(key), _bigrams(value), _chars(key)
+    live = {x.get('key') for x in items}
     out = []
     for x in items:
         xk, xv = x.get('key'), x.get('value')
@@ -252,19 +265,41 @@ def similar_lines(key, value, items):
                  + len(vb & xvb) + len(kc & _chars(xk)))
         if score:
             out.append((score, x.get('noted_at', ''), x))
+    if archive_days and os.path.exists(ARCHIVE_PATH):
+        day = today()
+        seen = set()
+        for x in sorted(_load_archive(), key=lambda x: x.get('archived_at', ''), reverse=True):
+            xk = x.get('key')
+            if (xk == key or xk in live or xk in seen or x.get('archive_reason') == 'replaced'
+                    or _age(x.get('archived_at'), day) > archive_days):
+                continue                      # 同一个 key 再记回来正是沿用，不拦
+            seen.add(xk)
+            score = 3 * len(kb & _bigrams(xk)) + len(kc & _chars(xk))
+            if score:
+                out.append((score, x.get('noted_at', ''), dict(x, archived=True)))
     out.sort(key=lambda t: (t[0], t[1]), reverse=True)
     return [x for _, _, x in out]
 
 
-def render_similar_note(item):
-    """ctx_set 回执末尾带的一句：刚新开的这行，像不像已经挂着的某一件。没有就返回空串。
-    写不写回那个 key，模型自己定；写回去了，这行记得收掉。"""
-    sim = (item or {}).get('similar') or []
+def render_similar_note(held):
+    """SimilarLine 里给模型看的那句（也接受带 .similar / ['similar'] 的东西）。没有像的就返回空串。"""
+    sim = getattr(held, 'similar', None)
+    if sim is None:
+        sim = (held or {}).get('similar') if isinstance(held, dict) else None
+    sim = sim or []
     if not sim:
         return ''
-    return ('已经挂着的里头有像是同一件事的：%s。同一件事就 ctx_set 写回那个 key（旧的那句会自己归档），'
-            '再 ctx_drop 掉刚才这行，别让两行打架；不是同一件就不用管。'
-            % '；'.join('「%s」%s（%s 起）' % (x.get('key'), x.get('value'), x.get('noted_at')) for x in sim))
+    key = getattr(held, 'key', None) or (held.get('key') if isinstance(held, dict) else '')
+    parts = []
+    for x in sim:
+        if x.get('archived'):
+            parts.append('以前记过「%s」%s（%s 到 %s，%s）' % (
+                x.get('key'), x.get('value'), x.get('noted_at', ''), x.get('archived_at', ''),
+                _PAST_HOW.get(x.get('archive_reason'), x.get('archive_reason', ''))))
+        else:
+            parts.append('「%s」%s（%s 起）' % (x.get('key'), x.get('value'), x.get('noted_at', '')))
+    return ('「%s」先没记：有像是同一件事的——%s。是同一件就 ctx_set 写回那个 key（旧的那句自己归档，不用先扔）；'
+            '确定是另一件事，就带 force_new 再记一次。' % (key, '；'.join(parts)))
 
 
 def _archive(items, reason):

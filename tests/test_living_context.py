@@ -312,20 +312,45 @@ class SetItem(Base):
         self.assertEqual(self.archive(), [])                 # 又活了，归档里不能还标着「后来换了说法」
         self.assertEqual(lc.search_archive('学期'), [])
 
-    def test_new_line_that_looks_like_an_old_one_is_pointed_out(self):
+    def test_new_line_that_looks_like_an_old_one_is_held_first(self):
         lc.set_item('学期', '期末在墨尔本')
         lc.set_item('吃药', '每天早晚各一片抗过敏的')
-        out = lc.set_item('人在哪', '放假回国了')             # 跟哪条都不像：不提
-        self.assertNotIn('similar', out)
-        self.assertEqual(lc.render_similar_note(out), '')
-        out = lc.set_item('学业', '期末考完了')               # 键上有同一个字、句子里也碰上：点出「学期」
-        self.assertEqual([s['key'] for s in out['similar']], ['学期'])
-        note = lc.render_similar_note(out)
+        lc.set_item('人在哪', '放假回国了')                   # 跟哪条都不像：直接记
+        self.assertEqual(len(lc.get_items()[0]), 3)
+        with self.assertRaises(lc.SimilarLine) as held:       # 键上有同一个字、句子里也碰上：先不写
+            lc.set_item('学业', '期末考完了')
+        self.assertEqual([s['key'] for s in held.exception.similar], ['学期'])
+        note = str(held.exception)
+        self.assertIn('「学业」先没记', note)
         self.assertIn('「学期」期末在墨尔本', note)
         self.assertIn('写回那个 key', note)
-        self.assertEqual(len(lc.get_items()[0]), 4)          # 照样记下了，写不写回去模型自己定
-        out = lc.set_item('学业')                             # 续期不是新开，不再提
-        self.assertNotIn('similar', out)
+        self.assertEqual(len(lc.get_items()[0]), 3)          # 真的没写
+        lc.set_item('学期', '期末考完了')                     # 是同一件：写回原来的 key，就是「情况变了」
+        self.assertEqual([x['value'] for x in lc.get_items()[0] if x['key'] == '学期'], ['期末考完了'])
+        self.assertEqual([a['archive_reason'] for a in self.archive()], ['replaced'])
+        lc.set_item('学业', '下学期的课选好了', force_new=True)   # 确定是另一件：带 force_new 再来
+        self.assertEqual(len(lc.get_items()[0]), 4)
+        lc.set_item('学业')                                   # 续期不是新开，不拦
+        lc.set_item('学业', '选了五门')                       # 同键换句也不拦
+
+    def test_a_key_that_was_archived_recently_is_offered_again(self):
+        lc.set_item('家人来访', '妈妈这阵子住她那儿', until='2026-11-05')
+        self.go(6)
+        lc.drop_item('家人来访')                               # 妈妈回去了
+        self.go(20)
+        with self.assertRaises(lc.SimilarLine) as held:       # 月底又来了：模型另起了个名字
+            lc.set_item('妈妈来住', '妈妈又来了，住到月底')
+        s = held.exception.similar[0]
+        self.assertEqual((s['key'], s.get('archived')), ('家人来访', True))
+        self.assertIn('以前记过「家人来访」', str(held.exception))
+        self.assertIn('结束了', str(held.exception))
+        lc.set_item('家人来访', '妈妈又来了，住到月底')          # 沿用旧 key，归档里才是一条线
+        self.assertEqual([x['key'] for x in lc.get_items()[0]], ['家人来访'])
+        self.go(100)                                          # 太久以前收起来的就不提了
+        lc.drop_item('家人来访')
+        self.go(200)
+        lc.set_item('妈妈来住', '第三次来')
+        self.assertEqual([x['key'] for x in lc.get_items()[0]], ['妈妈来住'])
 
     def test_broken_file_is_set_aside_not_overwritten(self):
         lc.set_item('学期', '期末在墨尔本')
