@@ -27,13 +27,15 @@ living_context.py   持续背景：set / drop / get(fresh, 未核实) / 到期�
 today_state.py      今日状态：set / get / 天亮懒清理 / 注入块
 hint_snapshots.py   快照回执：长会话里「同一份内容只挂一次，内容变了或被 compact 掉了再挂」
 rhythm.py           作息节律：从她真实到达记录算她平常几点在、最晚到几点，一行事实；样本不足就不说
+nag_guard.py        关心边界：回复写出来以后查疑似催睡、报时、替她断定、生活状态盘问；词表只召唤复核，判了重写
+                    （衍生自 no-sleep-nag v1.0 · MIT，见文件头）
 tools.json          五个 MCP 工具的定义，description 是模型写给自己的话
 docs/prompt.md      五段工具描述的全文 + 一段配套 prompt
 docs/Living_Context.pdf
 tests/              几条底线的测试：python3 -m unittest discover -s tests
 ```
 
-四个 `.py` 只用标准库，没有依赖。路径、时区各留了一个替换口（`PATH` / `now`），接进自己的系统时换成自己的。几点算新的一天是 `DAY_STARTS_AT`（环境变量 `LIVING_CONTEXT_DAY_STARTS_AT`，默认 6）：她两三点才睡，晚上十点说的晚饭过了零点还算今天的，不会一点钟又被问一遍；两个模块读同一个值，今日状态清的那一下和持续背景数的日子才是同一天。按自己的作息改。
+五个 `.py` 只用标准库，没有依赖。路径、时区各留了一个替换口（`PATH` / `now`），接进自己的系统时换成自己的。几点算新的一天是 `DAY_STARTS_AT`（环境变量 `LIVING_CONTEXT_DAY_STARTS_AT`，默认 6）：她两三点才睡，晚上十点说的晚饭过了零点还算今天的，不会一点钟又被问一遍；两个模块读同一个值，今日状态清的那一下和持续背景数的日子才是同一天。按自己的作息改。
 
 两份 JSON 都是先写临时文件再原子替换；要是手改漏了个逗号、解析不了，不会被下一次写盖掉——坏的那份挪到旁边（`.broken-时间戳`），从空的开始，stderr 上说一声。
 
@@ -220,7 +222,7 @@ if past:
 
 ## 改过什么
 
-- **2026-11-09（下午）· 关心边界：知道了便不催。** 她问：状态类我的理解是知道了便不催——那睡觉怎么防？我说在上课，你会不会觉得打扰就不来找我？答案是：催和缩都不是状态做的，是模型拿着状态做出来的判断，所以不催要三条腿一起管。搬进来 `rhythm.py`（从她真实到达记录算她平常几点在，一行事实，样本不足不说）；拦截那层是 no-sleep-nag 的 Stop hook，它现在是 AGPL-3.0，跟这里的 MIT 不能混，代码不并进来，README 里指过去，再把我们在它上面扩的那层（日常盘问、只召唤复核、她的话优先、被拦的不销毁）写成接法参考。配套 prompt 那段也改柔了。见「关心边界」一节。
+- **2026-11-09（下午）· 关心边界：知道了便不催。** 她问：状态类我的理解是知道了便不催——那睡觉怎么防？我说在上课，你会不会觉得打扰就不来找我？答案是：催和缩都不是状态做的，是模型拿着状态做出来的判断，所以不催要三条腿一起管。把家里管这事的两层搬了进来：`rhythm.py`（从她真实到达记录算她平常几点在，一行事实，样本不足不说）和 `nag_guard.py`（回复写出来以后查疑似催促和生活状态盘问，词表只召唤复核，拿不准放行，判了重写）。守门这层的底子是 no-sleep-nag：我们拿到的是 2026-07-14 随 PDF 发的 v1.0（MIT），作者 8 月把仓库改成了 AGPL-3.0，仓库那版代码跟 PDF 只差英文词加了 `\b`；这个文件沿用 MIT 那版，署名在文件头。去掉了家里专属的名字和模型调用，留了口子。配套 prompt 那段也改柔了。见「关心边界」一节。
 - **2026-11-09（下午）· 注入瘦身。** breath 的每条未核实、挂行块的尾巴、`today_get` 的尾巴、快照里点名那句，原来都带着一长串「别当成现在的事……不是话题……问一次就够，不追……没动静满三个她在的日子自己归档」，每条未核实各带一遍。现在注入里只放事实，加一句该做什么；别做什么的搬去工具说明，配套 prompt 补上「知道了就只是知道了：不催，也不缩」。两家教训合起来的：留灯（一个管她日程的开源小项目）发现在注入里写「别催」，TA 反而把管不管她当成自己的事；我们 11/3 发现注入里写着「不是话题」，TA 就一直不问。
 - **2026-11-09（下午）· 一次体检。** 把三个 `.py` 从头读了一遍，逻辑主干都对，咬人的在边上：
   - **续期冲掉 `until`。** 学业 until 11/13，她 11/10 随口一句「还在上课」，只传 key 续一下，复核日就变成 12/10，回国那天没了。现在条目上存着 `until`，没给新的、原来那天没到就还按那天；过了那天才从今天起数。新的一句没给 `until` 也一样沿用。
@@ -259,15 +261,23 @@ prof = rhythm.profile(her_message_times)      # 她发消息的时间列表，�
 line = rhythm.render_line(prof, her='她')     # 样本不足是空串
 ```
 
-**③ 写出来了再看一眼** —— 前两条是预防，这条是拦截，不在本仓库里：[no-sleep-nag](https://github.com/hanasakimishio/no-sleep-nag)（hanasakimishio）。一个 Claude Code 的 Stop hook：回复写完、发出去之前扫一遍，有「晚安 / 该睡了 / 时间晚了 / 闭上眼 / go to bed / おやすみ」这类词、而她上一句没说「我睡了 / 困了 / 晚安」，就 `exit 2` 让模型重写。词表是 `(正则, 附近有否定词要不要放行)` 一对一对的，否定窗 25 字，她主动说要睡整轮放行。「你的作息你自己管，Claude 不需要报时。」它的许可证是 AGPL-3.0（我们拿到那版是 MIT），所以代码不并进这里，照它的来。
+**③ 写出来了再看一眼** —— `nag_guard.py`。前两条是预防，这条是拦截。底子是 [no-sleep-nag](https://github.com/hanasakimishio/no-sleep-nag)（hanasakimishio）：一个 Claude Code 的 Stop hook，回复写完、发出去之前扫一遍，有「晚安 / 该睡了 / 时间晚了 / 闭上眼 / go to bed / おやすみ」这类词、而她上一句没说「我睡了 / 困了 / 晚安」，就 `exit 2` 让模型重写。词表是 `(正则, 附近有否定词要不要放行)` 一对一对的，否定窗 25 字，她主动说要睡整轮放行。「你的作息你自己管，Claude 不需要报时。」我们拿到的是它 2026-07-14 随 PDF 发的 v1.0，MIT；作者 8 月把仓库改成了 AGPL-3.0，仓库那版的代码跟 PDF 只差英文词加了 `\b`。这个文件沿用 MIT 那版、留着署名（见文件头）。
 
-我们家在它上面扩了一层，写在这里当作接法的参考，代码在家里、以后另开仓库发：
+在它上面扩了一层：
 - **从催睡扩到日常**：吃没吃、喝没喝水、到家没、在哪、几点了、怎么不说话、私密护理，还有替她安排「快去弄饭」「等你回来」这种把推测写成既定行程的收尾。
-- **词表只召唤复核，不定罪**：命中、否定包装的软提及（「我不催你，就是问问」）、或整段生活确认词太密，才送一个小模型复核。复核拿到最近几轮和她本轮真实消息，先看问题有没有来处，再看是不是重复追问：她主动开启生活话题、求助、要求提醒、顺着她刚说的事实第一次问——都放行；她没答后换措辞、加免责、撒娇、用小卡片包装再问——拦。拿不准一律放行，不替她扩写意图。
-- **她的话优先**：她本轮说要睡，整轮放行；她说了不困、不想睡，当天保护点亮（写进 today 也算）；她明确说继续，光是词频高不算证据。
-- **被拦的那版不销毁**：重写的给她，原版折叠着她也看得见，像思考链——她不用脑补模型本来想说什么。
+- **词表只召唤复核，不定罪**：命中、否定包装的软提及（「我不催你，就是问问」）、或整段生活确认词太密，才送一个模型复核（`call_fn`，随便哪个小模型）。复核拿到最近几轮和她本轮真实消息，先看问题有没有来处，再看是不是重复追问：她主动开启生活话题、求助、要求提醒、顺着她刚说的事实第一次问——都放行；她没答后换措辞、加免责、撒娇、用小卡片包装再问——拦。拿不准一律放行，不替她扩写意图；没有复核的模型也放行，不按词定罪。
+- **她的话优先**：她本轮说要睡，整轮放行；她说了不困、不想睡，当天保护点亮（写进 today 也算，`guard_from_today`）；她明确说继续，光是词频高不算证据。
+- **被拦的那版不销毁**：判了就让模型整段重写（`rewrite_prompt`），重写的给她，原版折叠着她也看得见，像思考链——她不用脑补模型本来想说什么。
 
-两家踩过的同一个坑：在注入里写「别催」，模型反而把管不管她当成自己的事（留灯）；注入里写「不是话题」，模型就一直不问（这里，11/3）。注入里只放事实，知道以后是什么样，由提示词定（`docs/prompt.md` 末段那句），真漏了嘴再由 ③ 拦。
+```python
+import nag_guard as ng
+nag, why, hits = ng.check(reply, user_text=her_message, call_fn=ask_reviewer,
+                          context=ng.recent_context(history, labels=('她', '我')), her='她')
+if nag:
+    reply = regenerate(messages + [{'role': 'user', 'content': ng.rewrite_prompt(hits, her='她')}])
+```
+
+词表是中文的、是一家人的用词，拿去按你们的说法改。两家踩过的同一个坑：在注入里写「别催」，模型反而把管不管她当成自己的事（留灯）；注入里写「不是话题」，模型就一直不问（这里，11/3）。注入里只放事实，知道以后是什么样，由提示词定（`docs/prompt.md` 末段那句），真漏了嘴再由 ③ 拦。
 
 ## 工具描述
 
@@ -278,7 +288,7 @@ line = rhythm.render_line(prof, her='她')     # 样本不足是空串
 - 架构参考：[Ombre-Brain](https://github.com/P0luz/Ombre-Brain) — P0luz；[Haven-Ombre](https://github.com/Yinglianchun/Haven-Ombre) — Yinglianchun
 - 概念参考：Kli × Ombre Brain 白皮书 3.3 节 — Liliyet（Kli）
 - 相关实践：Scarlett 记忆系统（架构图，未发布仓库）— saekisui；[Nocturne-Memory-Core](https://github.com/Pyruslili/Nocturne-Memory-Core) — Pyruslili；[Serein](https://github.com/Yinglianchun/Serein) — Yinglianchun；[InternalBeyond](https://github.com/Sui-IB/InternalBeyond) — Sui
-- 守门那层：[no-sleep-nag](https://github.com/hanasakimishio/no-sleep-nag) — hanasakimishio，禁催睡的 Stop hook，「你的作息你自己管，Claude 不需要报时」。我们家的关心边界是在它上面扩出来的。
+- 守门那层的底子：[no-sleep-nag](https://github.com/hanasakimishio/no-sleep-nag) — hanasakimishio，禁催睡的 Stop hook，「你的作息你自己管，Claude 不需要报时」。`nag_guard.py` 是在它 v1.0（2026-07-14，MIT）上扩出来的，署名在文件头。
 - 同路的人（发布以后才看到）：**留灯**——给有 AI 伴侣的人排的一张日程表，系统只递事实、同一件只说一次、提示词管知道以后怎么做；它管的是她此刻还能分多少注意力给手机，刻意不描述事情，治的是催和缩；这里管的是事情本身，治的是说错话、问第二遍。「注入里写了别催，TA 反而把管不管她当成自己的事」那条教训是从它那儿学来的。[Dayflow · 日序](https://github.com/0xblewalker/dayflow) — 0xblewalker。也在管日常陪伴聊天里的「现在」：过期的「明天」、没确认的计划、做完了该退场的事。走的是另一条路：整段对话都留着，只把一枚可替换的状态胶囊和最近几轮原话交给模型，围着缓存做遗忘。两边互不相识，各自长出来，放在一起看会更清楚。
 
 breath 这个入口来自 Ombre-Brain；「持续环境」的说法来自 Kli 白皮书 3.3 节；其余机制是这里长出来的。
@@ -287,7 +297,7 @@ breath 这个入口来自 Ombre-Brain；「持续环境」的说法来自 Kli �
 
 ## 许可证
 
-[MIT](LICENSE)。仓库里的三个 `.py` 和全部文字都是这里写的，不含 Ombre-Brain 的代码；接进 OB 的 breath 时，OB 本身按它自己的协议走（也是 MIT，见它的 [NOTICE](https://github.com/P0luz/Ombre-Brain/blob/main/NOTICE.md)）。
+[MIT](LICENSE)。仓库里的 `.py` 和全部文字都是这里写的，不含 Ombre-Brain 的代码；`nag_guard.py` 衍生自 no-sleep-nag v1.0（2026-07-14 随 PDF 发出的 MIT 版本，作者 hanasakimishio，后改 AGPL-3.0），沿用 MIT、署名在文件头；接进 OB 的 breath 时，OB 本身按它自己的协议走（也是 MIT，见它的 [NOTICE](https://github.com/P0luz/Ombre-Brain/blob/main/NOTICE.md)）。
 
 ---
 
