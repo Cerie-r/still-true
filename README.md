@@ -34,7 +34,7 @@ docs/prompt.md      五段工具描述的全文 + 一段配套 prompt
 docs/改过什么.md     每一笔改动的起因、改法、教训
 docs/关心边界.md     三条腿怎么接、复核怎么判、两家踩过的坑
 README.en.md        English
-docs/Living_Context.pdf
+docs/Living_Context.pdf   设计小册 v2.0（2026.11）：封面、一张图、九页说明；pptx 源在她手里
 tests/              几条底线的测试：python3 -m unittest discover -s tests
 ```
 

@@ -38,7 +38,7 @@ nag_guard.py        the care boundary: after a reply is written, scan it for nag
                     the reviewer decides, a hit gets rewritten  (derived from no-sleep-nag v1.0 · MIT, see file header)
 tools.json          five MCP tool definitions; the descriptions are written by the model, to itself
 docs/prompt.md      the five descriptions in full + a companion prompt
-docs/Living_Context.pdf
+docs/Living_Context.pdf   the design note, v2.0 (2026.11): cover, one-page map, nine pages
 tests/              the ground rules as tests: python3 -m unittest discover -s tests
 ```
 
