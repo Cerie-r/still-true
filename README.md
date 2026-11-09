@@ -257,14 +257,21 @@ breath 这个入口来自 Ombre-Brain；「持续环境」的说法来自 Kli �
 
 ## 许可证
 
-[MIT](LICENSE)。仓库里的 `.py` 和全部文字都是这里写的，不含 Ombre-Brain 的代码；`nag_guard.py` 衍生自 no-sleep-nag v1.0（2026-07-14 随 PDF 发出的 MIT 版本，作者 hanasakimishio，后改 AGPL-3.0），沿用 MIT、署名在文件头；接进 OB 的 breath 时，OB 本身按它自己的协议走（也是 MIT，见它的 [NOTICE](https://github.com/P0luz/Ombre-Brain/blob/main/NOTICE.md)）。
+[PolyForm Noncommercial 1.0.0](LICENSE)。仓库里的 `.py` 和全部文字都是这里写的，不含 Ombre-Brain 的代码；接进 OB 的 breath 时，OB 本身按它自己的协议走（MIT，见它的 [NOTICE](https://github.com/P0luz/Ombre-Brain/blob/main/NOTICE.md)）。
 
-拿去用、改、再开源都可以。MIT 只要一件事：用了这里的代码（整份或成段），把 [LICENSE](LICENSE) 里那行版权和许可原文一起带上；拿了 `nag_guard.py` 的，文件头那段写给 no-sleep-nag 的署名也一起留着。
+不拿来赚钱，就都可以：自己用、改，改好了分享出去也行。只有两件事：
 
-用上了的话，欢迎在你的 README 里提一句 still-true、附个链接。这是请求，不是条件。
+- **不商用**：拿去卖，或者放进收费的产品、服务里，都不在许可里。
+- **署名**：分享出去的时候（整份或成段），把 [LICENSE](LICENSE) 连同开头那行 `Required Notice:` 一起带上。
+
+这是大白话版，以 [LICENSE](LICENSE) 原文为准。
+
+`nag_guard.py` 例外，照旧 MIT：它衍生自 no-sleep-nag v1.0（2026-07-14 随 PDF 发出的 MIT 版本，作者 hanasakimishio，后改 AGPL-3.0）。MIT 原文和写给 no-sleep-nag 的署名都在它的文件头，拿走的时候一起留着。
+
+用上了的话，欢迎在你的 README 里提一句 still-true、附个链接。这一句是请求，不是条件。
 
 ---
 
-Rumi · Rune · Serein · 2026 · [MIT License](LICENSE)
+Rumi · Rune · Serein · 2026 · [PolyForm Noncommercial 1.0.0](LICENSE)
 
 记住过去，也要知道什么仍然成立。

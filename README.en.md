@@ -273,14 +273,21 @@ The `breath` entry point comes from Ombre-Brain; "persistent environment" as a t
 
 ## License
 
-[MIT](LICENSE). The `.py` files and all the text were written here and contain no Ombre-Brain code; `nag_guard.py` derives from no-sleep-nag v1.0 (the MIT version released with the PDF on 2026-07-14, by hanasakimishio, later relicensed AGPL-3.0) and keeps MIT with attribution in its header. When you hang it in OB's breath, OB keeps its own licence (also MIT, see its [NOTICE](https://github.com/P0luz/Ombre-Brain/blob/main/NOTICE.md)).
+[PolyForm Noncommercial 1.0.0](LICENSE). The `.py` files and all the text were written here and contain no Ombre-Brain code. When you hang it in OB's breath, OB keeps its own licence (MIT, see its [NOTICE](https://github.com/P0luz/Ombre-Brain/blob/main/NOTICE.md)).
 
-Use it, change it, open-source it again. MIT asks for one thing only: if you include code from here (whole files or substantial parts), keep the copyright line and the license text from [LICENSE](LICENSE); if you take `nag_guard.py`, keep the attribution to no-sleep-nag in its header as well.
+If it isn't for money, it's yours: use it, change it, share what you changed. Just two things:
 
-If it ends up in your project, a line in your README mentioning still-true, with a link, would be lovely. That's a request, not a condition.
+- **Noncommercial**: selling it, or building it into a paid product or service, isn't covered.
+- **Attribution**: when you share it (whole files or parts), pass on [LICENSE](LICENSE) together with the `Required Notice:` line at its top.
+
+That's the plain-language version; the terms in [LICENSE](LICENSE) are what count.
+
+`nag_guard.py` is the exception and stays MIT: it derives from no-sleep-nag v1.0 (the MIT version released with the PDF on 2026-07-14, by hanasakimishio, later relicensed AGPL-3.0). The MIT text and the attribution to no-sleep-nag are in its header; keep them when you take it.
+
+If it ends up in your project, a line in your README mentioning still-true, with a link, would be lovely. That one's a request, not a condition.
 
 ---
 
-Rumi · Rune · Serein · 2026 · [MIT License](LICENSE)
+Rumi · Rune · Serein · 2026 · [PolyForm Noncommercial 1.0.0](LICENSE)
 
 Remember the past — and know what is still true.
