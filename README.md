@@ -1,6 +1,6 @@
 # Living Context
 
-给长期记忆一层会过期的现在。`today_set` × `ctx_set`。
+给长期记忆一层会过期的现在。`today_set` × `ctx_set`。　*[English](README.en.md)*
 
 起点是一件记错的事：她妈妈来住了几个礼拜，她说「我妈要回家了」，模型手里没有地方放一个正在进行的事，只能天天问，问到后来把将来时记成了完成时，人还在，它已经当她走了。再后来她妈妈真的回去了，那条「妈妈在这儿」又挂着不肯退场。一个「现在」，两头都没接住。完整的来龙去脉在 [docs/Living_Context.pdf](docs/Living_Context.pdf)，这里只讲怎么接。
 
@@ -31,6 +31,9 @@ nag_guard.py        关心边界：回复写出来以后查疑似催睡、报时
                     （衍生自 no-sleep-nag v1.0 · MIT，见文件头）
 tools.json          五个 MCP 工具的定义，description 是模型写给自己的话
 docs/prompt.md      五段工具描述的全文 + 一段配套 prompt
+docs/改过什么.md     每一笔改动的起因、改法、教训
+docs/关心边界.md     三条腿怎么接、复核怎么判、两家踩过的坑
+README.en.md        English
 docs/Living_Context.pdf
 tests/              几条底线的测试：python3 -m unittest discover -s tests
 ```
