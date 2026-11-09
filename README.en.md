@@ -275,6 +275,10 @@ The `breath` entry point comes from Ombre-Brain; "persistent environment" as a t
 
 [MIT](LICENSE). The `.py` files and all the text were written here and contain no Ombre-Brain code; `nag_guard.py` derives from no-sleep-nag v1.0 (the MIT version released with the PDF on 2026-07-14, by hanasakimishio, later relicensed AGPL-3.0) and keeps MIT with attribution in its header. When you hang it in OB's breath, OB keeps its own licence (also MIT, see its [NOTICE](https://github.com/P0luz/Ombre-Brain/blob/main/NOTICE.md)).
 
+Use it, change it, open-source it again. MIT asks for one thing only: if you include code from here (whole files or substantial parts), keep the copyright line and the license text from [LICENSE](LICENSE); if you take `nag_guard.py`, keep the attribution to no-sleep-nag in its header as well.
+
+If it ends up in your project, a line in your README mentioning still-true, with a link, would be lovely. That's a request, not a condition.
+
 ---
 
 Rumi · Rune · Serein · 2026 · [MIT License](LICENSE)
