@@ -11,20 +11,25 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 import living_context as lc  # noqa: E402
 
 D0 = datetime.date(2026, 11, 1)
+REAL_TODAY = lc.today        # 真的那个 today()，按 DAY_STARTS_AT 算；测几点算新的一天时用
 
 
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.saved = (lc.PATH, lc.ARCHIVE_PATH, lc.today, lc.GRACE_DAYS, lc.CHANNELS)
+        self.saved = (lc.PATH, lc.ARCHIVE_PATH, lc.today, lc.now, lc.GRACE_DAYS, lc.CHANNELS)
         lc.PATH = os.path.join(self.tmp.name, 'lc.json')
         lc.ARCHIVE_PATH = os.path.join(self.tmp.name, 'lc_archive.json')
         self.day = D0
         lc.today = lambda: self.day
 
     def tearDown(self):
-        lc.PATH, lc.ARCHIVE_PATH, lc.today, lc.GRACE_DAYS, lc.CHANNELS = self.saved
+        lc.PATH, lc.ARCHIVE_PATH, lc.today, lc.now, lc.GRACE_DAYS, lc.CHANNELS = self.saved
         self.tmp.cleanup()
+
+    def archive(self):
+        with open(lc.ARCHIVE_PATH, encoding='utf-8') as f:
+            return json.load(f)['items']
 
     def go(self, days):
         self.day = D0 + datetime.timedelta(days=days)
@@ -231,7 +236,7 @@ class Sync(Base):
 
 
 class SetItem(Base):
-    """一件一行：还在只传 key；变了丢旧建新；until 写日子。"""
+    """一件一行：还在只传 key；变了丢旧建新；until 写日子，没到不冲掉；满 30 天那天就问。"""
 
     def test_key_only_renews_and_keeps_the_sentence(self):
         lc.set_item('考试', '在准备期末', ttl_days=3)
@@ -240,8 +245,41 @@ class SetItem(Base):
         fresh, stale = lc.get_items()
         x = fresh[0]
         self.assertEqual((x['value'], x['noted_at']), ('在准备期末', D0.isoformat()))
-        self.assertEqual(x['recheck_after'], (self.day + datetime.timedelta(days=30)).isoformat())
+        self.assertEqual(x['recheck_after'], (self.day + datetime.timedelta(days=29)).isoformat())
         self.assertFalse(os.path.exists(lc.ARCHIVE_PATH))
+
+    def test_a_month_means_day_thirty(self):
+        lc.set_item('考试', '在准备期末')                    # 默认 30 天
+        self.go(29)
+        self.assertEqual([x['key'] for x in lc.get_items()[0]], ['考试'])      # 第 29 天还不问
+        self.go(30)
+        self.assertEqual([x['key'] for x in lc.get_items()[1]], ['考试'])      # 满一个月那天递回来
+        lc.set_item('出差', '在悉尼', ttl_days=1)
+        self.assertEqual([x['key'] for x in lc.get_items()[0]], ['出差'])      # ttl 1：今天还好好的
+        self.go(31)
+        self.assertIn('出差', [x['key'] for x in lc.get_items()[1]])          # 明天就问
+
+    def test_renewing_does_not_wash_out_a_known_until(self):
+        lc.set_item('学业', '期末在墨尔本', until='2026-11-13')
+        self.go(9)
+        lc.set_item('学业')                                  # 11/10 她随口说一句还在上课
+        self.assertEqual(lc.get_items()[0][0]['recheck_after'], '2026-11-13')
+        lc.set_item('学业', '考完了，在收拾行李')             # 新的一句，没给 until：回国那天还是那天
+        x = lc.get_items()[0][0]
+        self.assertEqual((x['value'], x['recheck_after'], x['until']), ('考完了，在收拾行李', '2026-11-13', '2026-11-13'))
+        lc.set_item('学业', until='2026-11-20')              # 真改了日子就听新的
+        self.assertEqual(lc.get_items()[0][0]['recheck_after'], '2026-11-20')
+        lc.set_item('学业', ttl_days=7)                      # 明说要早点再看，也听
+        x = lc.get_items()[0][0]
+        self.assertEqual((x['recheck_after'], x['until']), ((self.day + datetime.timedelta(days=6)).isoformat(), ''))
+
+    def test_until_that_has_passed_falls_back_to_ttl(self):
+        lc.set_item('学业', '期末在墨尔本', until='2026-11-13')
+        self.go(13)                                          # 11/14，过了那天
+        self.assertEqual([x['key'] for x in lc.get_items()[1]], ['学业'])
+        lc.set_item('学业')                                  # 她说还在
+        x = lc.get_items()[0][0]
+        self.assertEqual((x['recheck_after'], x['until']), ((self.day + datetime.timedelta(days=29)).isoformat(), ''))
 
     def test_new_sentence_retires_the_old_one(self):
         lc.set_item('学期', '期末在墨尔本')
@@ -256,8 +294,10 @@ class SetItem(Base):
     def test_until_is_a_date(self):
         lc.set_item('学期', '期末在墨尔本', until='2026-11-13')
         self.assertEqual(lc.get_items()[0][0]['recheck_after'], '2026-11-13')
-        lc.set_item('学期', until='2020-01-01')              # 早于今天就不认，照 ttl 算
-        self.assertEqual(lc.get_items()[0][0]['recheck_after'], (D0 + datetime.timedelta(days=30)).isoformat())
+        lc.set_item('学期', until='2020-01-01')              # 早于今天的不认：原来那天还没到，还按那天
+        self.assertEqual(lc.get_items()[0][0]['recheck_after'], '2026-11-13')
+        lc.set_item('出差', '在悉尼', until='2020-01-01')     # 新记的一条给了个过去的日子：照 ttl 算
+        self.assertEqual(lc.get_items()[0][1]['recheck_after'], (D0 + datetime.timedelta(days=29)).isoformat())
 
     def test_key_only_needs_an_existing_line(self):
         with self.assertRaises(ValueError):
@@ -266,8 +306,54 @@ class SetItem(Base):
     def test_undo_brings_the_old_sentence_back(self):
         lc.set_item('学期', '期末在墨尔本')
         lc.set_item('学期', '放假在家', source_turn='t1', source_session='s1')
+        self.assertEqual([a['value'] for a in self.archive()], ['期末在墨尔本'])
         lc.undo_turn_writes('t1', 's1')
         self.assertEqual(lc.get_items()[0][0]['value'], '期末在墨尔本')
+        self.assertEqual(self.archive(), [])                 # 又活了，归档里不能还标着「后来换了说法」
+        self.assertEqual(lc.search_archive('学期'), [])
+
+    def test_new_line_that_looks_like_an_old_one_is_pointed_out(self):
+        lc.set_item('学期', '期末在墨尔本')
+        lc.set_item('吃药', '每天早晚各一片抗过敏的')
+        out = lc.set_item('人在哪', '放假回国了')             # 跟哪条都不像：不提
+        self.assertNotIn('similar', out)
+        self.assertEqual(lc.render_similar_note(out), '')
+        out = lc.set_item('学业', '期末考完了')               # 键上有同一个字、句子里也碰上：点出「学期」
+        self.assertEqual([s['key'] for s in out['similar']], ['学期'])
+        note = lc.render_similar_note(out)
+        self.assertIn('「学期」期末在墨尔本', note)
+        self.assertIn('写回那个 key', note)
+        self.assertEqual(len(lc.get_items()[0]), 4)          # 照样记下了，写不写回去模型自己定
+        out = lc.set_item('学业')                             # 续期不是新开，不再提
+        self.assertNotIn('similar', out)
+
+    def test_broken_file_is_set_aside_not_overwritten(self):
+        lc.set_item('学期', '期末在墨尔本')
+        lc.set_item('吃药', '每天一片')
+        with open(lc.PATH, 'w', encoding='utf-8') as f:
+            f.write('{"items": [ 手改漏了个逗号')
+        lc.set_item('新的', '一条')
+        self.assertEqual([x['key'] for x in self.raw()['items']], ['新的'])
+        aside = [n for n in os.listdir(self.tmp.name) if n.startswith('lc.json.broken-')]
+        self.assertEqual(len(aside), 1)                       # 坏的那份还在，挪到一边了
+        with open(os.path.join(self.tmp.name, aside[0]), encoding='utf-8') as f:
+            self.assertIn('手改漏了个逗号', f.read())
+
+    def test_day_starts_at_six(self):
+        saved = lc.DAY_STARTS_AT
+        try:
+            lc.DAY_STARTS_AT, lc.today = 6, REAL_TODAY
+            lc.now = lambda: datetime.datetime(2026, 11, 10, 1, 30)   # 凌晨一点半
+            self.assertEqual(lc.today(), datetime.date(2026, 11, 9))  # 还算 9 号
+            lc.set_item('学期', '期末在墨尔本')
+            self.assertEqual(lc.get_items()[0][0]['noted_at'], '2026-11-09')
+            lc.now = lambda: datetime.datetime(2026, 11, 10, 6, 0)
+            self.assertEqual(lc.today(), datetime.date(2026, 11, 10))  # 六点整起算新的一天
+            lc.DAY_STARTS_AT = 0                                       # 别人按零点算也行
+            lc.now = lambda: datetime.datetime(2026, 11, 10, 1, 30)
+            self.assertEqual(lc.today(), datetime.date(2026, 11, 10))
+        finally:
+            lc.DAY_STARTS_AT = saved
 
 
 
@@ -298,6 +384,35 @@ class Archive(Base):
         lc.drop_item('吃药')
         self.assertEqual([h['key'] for h in lc.search_archive('药')], ['吃药'])   # 问得很短也找得到
         self.assertEqual(lc.render_past_states([]), '')
+
+    def test_one_key_comes_back_as_a_whole_line(self):
+        for i, v in enumerate(['在上课', '在复习', '在考试', '考完等成绩', '放假了']):
+            self.go(i)
+            lc.set_item('学期', v)
+        lc.set_item('吃药', '每天一片')
+        lc.drop_item('吃药')
+        hits = lc.search_archive('学期')
+        self.assertEqual([h['value'] for h in hits], ['在上课', '在复习', '在考试', '考完等成绩'])   # 四段都在，按时间排
+        self.assertEqual([h['key'] for h in lc.search_archive('药')], ['吃药'])
+        hits = lc.search_archive('学期吃药', limit=1)                   # limit 数的是键：只给碰得最多的那一件
+        self.assertEqual({h['key'] for h in hits}, {'学期'})
+        self.assertEqual(len(hits), 4)
+
+    def test_saying_it_ended_after_it_archived_itself(self):
+        lc.set_item('家人来访', '妈妈这阵子住她那儿', ttl_days=3)
+        for k in (3, 4, 5, 6):
+            self.go(k)
+            lc.render_breath_block()                                   # 三个她在的日子没动静，第四天自己归档
+        self.assertEqual(lc.get_items(), ([], []))
+        self.assertIn('不代表结束', lc.render_past_states(lc.search_archive('妈妈')))
+        self.go(10)
+        self.assertEqual(lc.drop_item('家人来访'), 1)                   # 她现在才说妈妈回去了
+        blk = lc.render_past_states(lc.search_archive('妈妈'))
+        self.assertIn('how="结束了"', blk)
+        self.assertNotIn('不代表结束', blk)
+        self.assertEqual(self.archive()[0]['closed_at'], self.day.isoformat())
+        self.assertEqual(lc.drop_item('家人来访'), 0)                   # 再扔一次：没有可扔的了
+        self.assertEqual(lc.drop_item('从没记过'), 0)
 
 
 if __name__ == '__main__':

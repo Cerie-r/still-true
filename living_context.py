@@ -11,7 +11,7 @@
 核心只有一条：过期不删，也不装作有效。到了复核日先降级成「未核实」（stale）——读到
 它的模型知道该问一句「还在吗」，而不是张口就当真。到复核的那一条会递到它面前，准它
 聊着顺手问一句还作不作数，问一次就够，不追：她说还在就续上，说不在了就扔掉。一直没
-动静的，递到面前满三个她在的日子才归档——数的是她在、它也真递到面前的日子，不数日历，
+动静的，在它眼前、她也在的日子满三个才归档——数的是它在上下文里、她也在的日子，不数日历，
 不会趁她不在悄悄消失，也不会一直挂着反复问。退场的留一块墓碑：下一次压缩摘要时，
 墓碑告诉摘要「这条已不成立」，旧引用不会再被捡回来。
 
@@ -26,23 +26,43 @@ import io
 import json
 import os
 import re
+import sys
 import threading
 import uuid
 
 PATH = os.environ.get('LIVING_CONTEXT_PATH', 'living_context.json')
 ARCHIVE_PATH = PATH[:-5] + '_archive.json' if PATH.endswith('.json') else PATH + '.archive'
-DEFAULT_TTL = 30          # 复核期，不是事情会持续这么久的依据
-GRACE_DAYS = 3            # 未核实的递到面前满几个她在的日子，还没续没扔，就归档（留墓碑）。数的是她在、它也真
-                          # 递到面前的日子（_due_shown），不数日历：她不在的日子不算。None = 一直挂着，只等模型扔
+DEFAULT_TTL = 30          # 复核期：不知道哪天结束时，从记下那天起满 30 天递回来问。不是事情会持续这么久的依据
+GRACE_DAYS = 3            # 未核实的在它眼前、她也在的日子满几个，还没续没扔，就归档（留墓碑）。数的是 _due_shown
+                          # 里的日子，不数日历：她不在的日子不算。None = 一直挂着，只等模型扔
 DUE_TELL_DAYS = 2         # 未核实的条目在 today_get 回执末尾最多带两天：同样数她在的日子，不是日历
 TOMBSTONE_DAYS = 14       # 墓碑最多立两周：哪条通道两周都没把它收进摘要，也照样清掉，不让它越堆越多
 TURN_WRITES_DAYS = 7      # 按轮撤销只管最近一周的写入，再早的撤销记录清掉
+SIMILAR_MAX = 3           # 新开一行时，回执里最多点出几条像是同一件事的
+ARCHIVE_PER_KEY = 8       # 翻归档时，同一个键最多给最近几段
 CHANNELS = ('api',)       # 只列走「增量挂行」的通道：读 pending_items、摘要落盘后 mark_synced 的那种。
                           # 走完整快照的（SDK 路线：render_snapshot + hint_snapshots）不用列——它从不
                           # mark_synced，列进来墓碑就永远收不掉。真有第二条挂行的通道，再加进来。
 
-# 按她的时区算「今天」。接进自己的系统时替换成自己的时区函数即可。
-today = datetime.date.today
+
+def _hour(v, default):
+    try:
+        return max(0, min(23, int(v)))
+    except (TypeError, ValueError):
+        return default
+
+
+# 几点算新的一天。她两三点才睡，十点说的晚饭过了零点还算今天的，早上六点以前都算昨天。
+# today_state 读同一个环境变量，两边的「一天」才是同一天。按自己的作息改。
+DAY_STARTS_AT = _hour(os.environ.get('LIVING_CONTEXT_DAY_STARTS_AT'), 6)
+
+# 按她的时区算「现在」。接进自己的系统时替换成自己的时区函数即可。
+now = datetime.datetime.now
+
+
+def today():
+    """她的「今天」：DAY_STARTS_AT 点以前还算昨天。复核日、她在的日子、归档的日子都按这个算。"""
+    return (now() - datetime.timedelta(hours=DAY_STARTS_AT)).date()
 
 # 她今天在不在。未核实的条目只在她在的日子里「递到面前」才算数，所以模型自己起的轮次（定时、心跳、
 # 主动敲门）别让它算进去：接进自己的系统时换成自己的判断，比如「她今天发过消息没有」。
@@ -72,25 +92,60 @@ def _locked(fn):
 
 # ───────────────────────── 存取 ─────────────────────────
 
-def load():
-    if not os.path.exists(PATH):
-        return {'items': []}
+def _read_json(path, default):
+    """读一份 JSON。解析不了（多半是手改漏了个逗号）就把坏文件挪到一边（.broken-时间戳）、从默认值开始：
+    不能让下一次写把她那份盖掉。挪不动就让它抛出来，什么都不写。"""
+    if not os.path.exists(path):
+        return copy.deepcopy(default)
     try:
-        with io.open(PATH, encoding='utf-8') as f:
+        with io.open(path, encoding='utf-8-sig') as f:
             return json.load(f)
-    except Exception:
-        return {'items': []}
+    except (ValueError, UnicodeDecodeError) as e:
+        aside = '%s.broken-%s' % (path, datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
+        os.replace(path, aside)
+        print('[living_context] %s 读不出来（%s），挪到了 %s，从空的开始' % (path, e, aside), file=sys.stderr)
+        return copy.deepcopy(default)
+
+
+def _write_json(path, obj):
+    tmp = path + '.tmp'
+    with io.open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def load():
+    return _read_json(PATH, {'items': []})
 
 
 def save(d):
-    tmp = PATH + '.tmp'
-    with io.open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(d, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, PATH)
+    _write_json(PATH, d)
+
+
+def _load_archive():
+    return _read_json(ARCHIVE_PATH, {'items': []}).get('items', [])
+
+
+def _save_archive(items):
+    _write_json(ARCHIVE_PATH, {'items': items})
 
 
 def _unsynced():
     return {ch: False for ch in CHANNELS}
+
+
+# 比字用的：两个字两个字地比，标点和空白不算
+_PUNCT = re.compile(r'[\s，。、,.!?！？「」"\'：:；;（）()·]+')
+_STOP = set('的了在是有和不这那她我他们也都就还个')     # 键上碰到这些虚字不算像
+
+
+def _bigrams(s):
+    s = _PUNCT.sub('', str(s or ''))
+    return {s[i:i + 2] for i in range(len(s) - 1)}
+
+
+def _chars(s):
+    return set(_PUNCT.sub('', str(s or ''))) - _STOP
 
 
 def _is_stale(x, day=None):
@@ -120,18 +175,20 @@ def _until(until, day):
 
 
 @_locked
-def set_item(key, value='', ttl_days=DEFAULT_TTL, said_by='', source_turn='', source_session='', until=''):
+def set_item(key, value='', ttl_days=None, said_by='', source_turn='', source_session='', until=''):
     """记一条她这阵子的处境，一件一行。
     - 只给 key（value 空）：她说还在——原话不动，从哪天开始的也不动，只把复核日往后推。
     - 给了新的一句、跟原来不一样：丢旧建新——旧的那句收进归档（reason='replaced'），新的一句从今天记起。
       不在原话上改，免得新旧搅在一起。
     - 同一句：当续期。
-    until：知道的那天（YYYY-MM-DD），过了那天它递回来问；比 ttl_days 优先。"""
+    复核日：until 写的那天（YYYY-MM-DD）优先。没给新的 until、原来记的那天还没到，就还按那天——她随口一句
+    「还在上课」不该把回国那天冲掉。都没有才按 ttl_days（默认 30）：从今天起满这么多天递回来问，
+    recheck_after 存的是最后一个不用问的日子。
+    新开一行时，回执里顺手点出已经挂着的里头像是同一件事的（similar）；写不写回那个 key，模型自己定。"""
     key = str(key or '').strip()
     value = str(value or '').strip()
     if not key:
         raise ValueError('ctx key must not be empty')
-    ttl_days = max(1, min(365, int(ttl_days or DEFAULT_TTL)))
     d = load()
     old = next((x for x in d.get('items', []) if x.get('key') == key), None)
     if not value:
@@ -142,19 +199,27 @@ def set_item(key, value='', ttl_days=DEFAULT_TTL, said_by='', source_turn='', so
     renew = old is not None and old.get('value') == value
     revision = uuid.uuid4().hex
     day = today()
-    due = _until(until, day) or (day + datetime.timedelta(days=ttl_days))
-    items = [x for x in d.get('items', []) if x.get('key') != key]
-    items.append({
+    known = _until(until, day)
+    if known is None and not ttl_days and old is not None:
+        known = _until(old.get('until'), day)          # 原来那天还没到：还按那天
+    if known is not None:
+        due = known
+    else:
+        ttl = max(1, min(365, int(ttl_days or DEFAULT_TTL)))
+        due = day + datetime.timedelta(days=ttl - 1)   # 第 ttl 天递回来：满 30 天那天就问，不是第 31 天
+    others = [x for x in d.get('items', []) if x.get('key') != key]
+    item = {
         'key': key,
         'value': value,
         'noted_at': (old.get('noted_at') if renew else '') or day.isoformat(),
         'recheck_after': due.isoformat(),
+        'until': known.isoformat() if known else '',
         'said_by': said_by or ((old or {}).get('said_by', '') if renew else ''),
         'synced': _unsynced(),
         '_status': 'fresh',
         '_write_revision': revision,
-    })
-    d['items'] = items
+    }
+    d['items'] = others + [item]
     if source_turn and source_session:
         # 记下这一轮写了什么，供「重 roll / 撤销这一轮」时按轮回退
         d.setdefault('_turn_writes', []).append({
@@ -165,30 +230,78 @@ def set_item(key, value='', ttl_days=DEFAULT_TTL, said_by='', source_turn='', so
     save(d)
     if old is not None and not renew:
         _archive([old], 'replaced')
-    return d['items'][-1]
+    out = dict(item)
+    if old is None:
+        sim = similar_lines(key, value, others)
+        if sim:
+            out['similar'] = [{'key': x.get('key'), 'value': x.get('value'), 'noted_at': x.get('noted_at', '')}
+                              for x in sim[:SIMILAR_MAX]]
+    return out
+
+
+def similar_lines(key, value, items):
+    """新开一行之前看一眼：已经挂着的里头，有没有像是同一件事的。两个字两个字地比键和句子，键上碰到的分量重；
+    键上有同一个字（虚字不算）也算碰上。碰上一点就点出来，让模型自己定——多提一句不要紧，两行打架才麻烦。
+    按像的程度排，一样像的新的在前。"""
+    kb, vb, kc = _bigrams(key), _bigrams(value), _chars(key)
+    out = []
+    for x in items:
+        xk, xv = x.get('key'), x.get('value')
+        xkb, xvb = _bigrams(xk), _bigrams(xv)
+        score = (3 * len(kb & xkb) + 2 * len((kb & xvb) | (vb & xkb))
+                 + len(vb & xvb) + len(kc & _chars(xk)))
+        if score:
+            out.append((score, x.get('noted_at', ''), x))
+    out.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return [x for _, _, x in out]
+
+
+def render_similar_note(item):
+    """ctx_set 回执末尾带的一句：刚新开的这行，像不像已经挂着的某一件。没有就返回空串。
+    写不写回那个 key，模型自己定；写回去了，这行记得收掉。"""
+    sim = (item or {}).get('similar') or []
+    if not sim:
+        return ''
+    return ('已经挂着的里头有像是同一件事的：%s。同一件事就 ctx_set 写回那个 key（旧的那句会自己归档），'
+            '再 ctx_drop 掉刚才这行，别让两行打架；不是同一件就不用管。'
+            % '；'.join('「%s」%s（%s 起）' % (x.get('key'), x.get('value'), x.get('noted_at')) for x in sim))
 
 
 def _archive(items, reason):
     """挪进归档文件：不再进上下文，但要翻还翻得到。"""
     if not items:
         return
-    arc = []
-    try:
-        if os.path.exists(ARCHIVE_PATH):
-            with io.open(ARCHIVE_PATH, encoding='utf-8') as f:
-                arc = json.load(f).get('items', [])
-    except Exception:
-        arc = []
-    now = today().isoformat()
+    arc = _load_archive()
+    day = today().isoformat()
     for x in items:
         y = dict(x)
-        y['archived_at'] = now
+        y['archived_at'] = day
         y['archive_reason'] = reason
         arc.append(y)
-    tmp = ARCHIVE_PATH + '.tmp'
-    with io.open(tmp, 'w', encoding='utf-8') as f:
-        json.dump({'items': arc}, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, ARCHIVE_PATH)
+    _save_archive(arc)
+
+
+def _unarchive(match):
+    """撤销的时候用：刚被收进归档的那句又活了，不能还在归档里标着「后来换了说法」。返回拿掉几条。"""
+    arc = _load_archive()
+    keep = [x for x in arc if not match(x)]
+    if len(keep) != len(arc):
+        _save_archive(keep)
+    return len(arc) - len(keep)
+
+
+def _close_in_archive(key, reason):
+    """live 里没有这条、她却说它结束了：多半是它到期先一步自己收起来了。到归档里把最近那条的理由改掉，
+    recall 翻出来才是「结束了」，不再是「不代表结束」。改了返回 1，归档里也没有就 0。"""
+    arc = _load_archive()
+    cands = [x for x in arc if x.get('key') == key and x.get('archive_reason') == 'expired']
+    if not cands:
+        return 0
+    latest = max(cands, key=lambda x: (x.get('archived_at', ''), x.get('noted_at', '')))
+    latest['archive_reason'] = reason
+    latest['closed_at'] = today().isoformat()
+    _save_archive(arc)
+    return 1
 
 
 def _tombstone(d, x, reason):
@@ -203,12 +316,13 @@ def _tombstone(d, x, reason):
 
 @_locked
 def drop_item(key, reason='dropped'):
-    """事情真结束了就扔：移入归档 + 留一块待同步的墓碑。返回移除条数。"""
+    """事情真结束了就扔：移入归档 + 留一块待同步的墓碑。返回移除条数。
+    live 里没有、归档里有一条到期自动收起来的：她现在才说结束，就把归档里那条改成结束了，也算 1。"""
     key = str(key or '').strip()
     d = load()
     gone = [x for x in d.get('items', []) if x.get('key') == key]
     if not gone:
-        return 0
+        return _close_in_archive(key, reason)
     d['items'] = [x for x in d.get('items', []) if x.get('key') != key]
     for x in gone:
         _tombstone(d, x, reason)
@@ -219,9 +333,9 @@ def drop_item(key, reason='dropped'):
 
 @_locked
 def sweep_expired(d=None):
-    """未核实的，递到面前满 GRACE_DAYS 个她在的日子（不含今天）还没人续没人扔，就归档，留墓碑。
-    数的是 _due_shown 里的日子，不数日历：她不在、没递到面前的日子不算。GRACE_DAYS 为 None 时不归档。
-    返回归档条数。"""
+    """未核实的，在它眼前、她也在的日子满 GRACE_DAYS 个（不含今天）还没人续没人扔，就归档，留墓碑。
+    数的是 _due_shown 里的日子，不数日历：她不在的日子不算。「在它眼前」算的是整份——挂出来的、
+    已经并进摘要住在上下文里的，都算。GRACE_DAYS 为 None 时不归档。返回归档条数。"""
     if GRACE_DAYS is None:
         return 0
     own = d is None
@@ -269,8 +383,9 @@ def _prune(d):
 
 
 def _note_shown(d, items=None):
-    """未核实的条目这会儿递到模型面前了：她今天也在的话，记下今天（_due_shown）。返回是否有改动。
-    items 不给就是全部未核实的（breath、快照、挂行、ctx_get 都整份递出去）。"""
+    """未核实的条目这会儿在模型眼前：她今天也在的话，记下今天（_due_shown）。返回是否有改动。
+    items 不给就是全部未核实的：breath、快照、ctx_get 都整份递出去；挂行通道里已经打过勾的那几条住在摘要里，
+    也在眼前，所以也整份算。today_get 只带头两天，它自己传 items。"""
     iso = today().isoformat()
     pool = d.get('items', []) if items is None else items
     todo = [x for x in pool if _is_stale(x) and iso not in (x.get('_due_shown') or [])]
@@ -495,48 +610,41 @@ def render_snapshot(tail=''):
 
 # ─────────────── 归档不是忘了：翻得到，但标成「以前」 ───────────────
 
-_PUNCT = re.compile(r'[\s，。、,.!?！？「」"\'：:；;（）()·]+')
-
-
-def _bigrams(s):
-    s = _PUNCT.sub('', str(s or ''))
-    return {s[i:i + 2] for i in range(len(s) - 1)}
-
-
 def search_archive(query, limit=3):
     """在归档里找以前的处境（扔掉的、换掉的、到期收起来的），给 recall 用：翻得到，交出去的时候标成「以前」。
     怎么算碰上：键的字全在她问的话里（「吃药」之于「那阵子吃的什么药」）；或者两个字两个字地比，碰上的够多，
-    键上的分量重；问得很短（「药」）就看键里有没有这个字。分一样就新的在前，同一句只给一次。"""
+    键上的分量重；问得很短（「药」「妈妈」）就看键里有没有这个字、句子里有没有这个词。
+    limit 数的是键，不是条：碰上「学期」就把它先后换过的几段整条线都给出来（按时间排，最多 ARCHIVE_PER_KEY 段），
+    不然换了四次只给后三段，头上是断的。键按碰得多少排，一样多的新的在前；同一段只给一次。"""
     qs = _PUNCT.sub('', str(query or ''))
     if not qs or not os.path.exists(ARCHIVE_PATH):
         return []
-    try:
-        with io.open(ARCHIVE_PATH, encoding='utf-8') as f:
-            arc = json.load(f).get('items', [])
-    except Exception:
-        return []
+    arc = _load_archive()
     qb, qc = _bigrams(qs), set(qs)
-    scored = []
+    best = {}
     for x in arc:
         k = _PUNCT.sub('', str(x.get('key') or ''))
         kc = set(k)
-        score = len(qb & _bigrams(x.get('value'))) + 2 * len(qb & _bigrams(k))
+        vb = _bigrams(x.get('value'))
+        score = len(qb & vb) + 2 * len(qb & _bigrams(k))
         if len(kc) >= 2 and kc <= qc:
             score += 3
-        elif len(qs) <= 2 and qc & kc:
+        elif len(qs) <= 2 and (qc & kc or qb & vb):   # 问得很短（「药」「妈妈」）：键里有这个字、或句子里有这个词
             score += 2
         if score >= 2:
-            scored.append((score, x.get('archived_at', ''), x))
-    scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
-    out, seen = [], set()
-    for _, _, x in scored:
-        sig = (x.get('key'), x.get('value'))
-        if sig in seen:
-            continue
-        seen.add(sig)
-        out.append(x)
-        if len(out) >= limit:
-            break
+            rank = (score, x.get('archived_at', ''))
+            if rank > best.get(x.get('key'), (0, '')):
+                best[x.get('key')] = rank
+    out = []
+    for key in sorted(best, key=lambda k: best[k], reverse=True)[:limit]:
+        segs, seen = [], set()
+        for x in sorted((x for x in arc if x.get('key') == key),
+                        key=lambda x: (x.get('noted_at', ''), x.get('archived_at', ''))):
+            sig = (x.get('value'), x.get('noted_at'), x.get('archived_at'))
+            if sig not in seen:
+                seen.add(sig)
+                segs.append(x)
+        out.extend(segs[-ARCHIVE_PER_KEY:])
     return out
 
 
@@ -559,15 +667,31 @@ def render_past_states(items):
 
 # ─────────────── 按轮撤销（重 roll / 手动编辑时用） ───────────────
 
+def _was_replaced_by(e, previous):
+    """认归档里的哪一条是这次撤销要拿回来的那句：同键、因「换了说法」收起来的，写入版本对得上
+    （老条目没有版本号的，就看那句话和收起来的日子）。"""
+    key, rev = e.get('key'), previous.get('_write_revision')
+
+    def match(x):
+        if x.get('key') != key or x.get('archive_reason') != 'replaced':
+            return False
+        if rev:
+            return x.get('_write_revision') == rev
+        return x.get('value') == previous.get('value') and x.get('archived_at') == e.get('day')
+    return match
+
+
 @_locked
 def undo_turn_writes(turn, session):
-    """只撤销这一轮写入、且现在仍是那个版本的条目；被后来的写入覆盖过的不动。"""
+    """只撤销这一轮写入、且现在仍是那个版本的条目；被后来的写入覆盖过的不动。
+    拿回来的那句如果刚被收进归档（丢旧建新那一下），归档里的那条也一并拿掉——它又活了，不是「以前」。"""
     if not turn or not session:
         return {'restored': 0, 'skipped': 0}
     d = load()
     events = d.get('_turn_writes', [])
     mine = [e for e in events if e.get('turn') == str(turn) and e.get('session') == str(session)]
     result = {'restored': 0, 'skipped': 0}
+    revived = []
     for e in reversed(mine):
         current = next((x for x in d.get('items', []) if x.get('key') == e['key']), None)
         if not current or current.get('_write_revision') != e['revision']:
@@ -578,8 +702,11 @@ def undo_turn_writes(turn, session):
         if previous is not None:
             previous['synced'] = _unsynced()
             d['items'].append(previous)
+            revived.append(_was_replaced_by(e, previous))
         result['restored'] += 1
     if mine:
         d['_turn_writes'] = [e for e in events if e not in mine]
         save(d)
+        for match in revived:
+            _unarchive(match)
     return result

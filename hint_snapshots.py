@@ -23,6 +23,7 @@ DB = os.environ.get('HINT_SNAPSHOTS_DB', 'hint_snapshots.db')
 TRANSCRIPTS = Path(os.environ.get('HINT_TRANSCRIPTS_DIR', ''))  # 例：~/.claude/projects/<项目目录名>
 KINDS = ('today', 'ctx')
 PATTERN = re.compile(r'<state_snapshot kind="(%s)" revision="([a-f0-9]{64})">' % '|'.join(KINDS))
+_SAFE_SID = re.compile(r'[a-zA-Z0-9-]+')   # 只在拿 sid 拼 transcript 文件名时要求：别让它带着 ../ 跑出去
 
 
 def _connect():
@@ -33,9 +34,11 @@ def _connect():
 
 def _still_in_context(sid, marker):
     """transcript 里、最后一个 compact 边界之后，还能找到这段 marker 吗？"""
+    if not str(TRANSCRIPTS) or not _SAFE_SID.fullmatch(sid or ''):
+        return True   # 查不了就当还在：宁可少挂一次，也不每轮重挂（退化成「同一 revision 只挂一次」）
     path = TRANSCRIPTS / (sid + '.jsonl')
-    if not str(TRANSCRIPTS) or not path.exists():
-        return True   # 查不了就当还在：宁可少挂一次，也不每轮重挂
+    if not path.exists():
+        return True
     found = False
     try:
         for line in path.read_text(encoding='utf-8').splitlines():
@@ -61,7 +64,7 @@ def prepare(sid, kind, body):
         raise ValueError(kind)
     revision = hashlib.sha256(body.encode('utf-8')).hexdigest()
     marker = '<state_snapshot kind="%s" revision="%s">' % (kind, revision)
-    if sid and re.fullmatch(r'[a-zA-Z0-9-]+', sid):
+    if sid:   # 回执认任何 sid；sid 长得不像文件名的，查不了 transcript，就只挂一次
         with _connect() as c:
             row = c.execute('SELECT revision FROM receipts WHERE sid=? AND kind=?', (sid, kind)).fetchone()
         if row and row[0] == revision and _still_in_context(sid, marker):
