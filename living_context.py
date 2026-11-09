@@ -473,18 +473,25 @@ def get_items(shown=False):
     return fresh, stale
 
 
+# 注入里只放事实，加一句该做什么；「别当成现在的事」「不是话题」「不追」「自己归档」这些搬去了工具说明。
+# 注入里的字决定模型跟这条事实是什么关系：写想让它做的，别写不想让它做的——写了「别催」，它反而把管不管当成自己的事；
+# 写了「不是话题」，它就一直不问。
+UNVERIFIED_CUE = '未核实的是到了复核日还没问过的：聊着顺手问一句还作不作数，还在就 %s，不在了就 %s。'
+
+
 def render_breath_block():
     """挂进 breath 的一小段。没有内容就返回空串——不占位、不硬凑。"""
     fresh, stale = get_items(shown=True)
     if not fresh and not stale:
         return ''
-    lines = ['<living_context note="现在身处哪里。会变的事，不是痕迹。">']
+    note = '现在身处哪里。会变的事，不是痕迹。'
+    if stale:
+        note += UNVERIFIED_CUE % ('ctx_set 同键续上', 'ctx_drop')
+    lines = ['<living_context note="%s">' % note]
     for x in fresh:
         lines.append('  <now key="%s" since="%s">%s</now>' % (x['key'], x['noted_at'], x['value']))
     for x in stale:
-        lines.append('  <unverified key="%s" since="%s" due="%s" days="%s" '
-                     'note="到期了，还没核实：别当成现在的事。聊着顺手问她一句还作不作数，还在就 ctx_set 同键续上，'
-                     '不在了就 ctx_drop 扔掉；问一次就够，不追。没动静也不要紧，递到面前满三个她在的日子，它自己归档">%s</unverified>'
+        lines.append('  <unverified key="%s" since="%s" due="%s" days="%s">%s</unverified>'
                      % (x['key'], x['noted_at'], x.get('recheck_after'), x.get('expired_days'), x['value']))
     lines.append('</living_context>')
     return '\n'.join(lines)
@@ -517,14 +524,13 @@ def pending_items(channel, shown=False):
 
 
 def _due_note(pend, how):
-    """到期没核实的递到面前：「不是话题」的例外，准模型顺口问一句。how = (续上的说法, 扔掉的说法)。
+    """到期没核实的递到面前：点名，准模型顺口问一句。how = (续上的说法, 扔掉的说法)。
     只点名还在的条目；已经扔掉的不点名。"""
     day = today().isoformat()
     keys = [x.get('key') for x in pend if not x.get('dropped') and x.get('recheck_after', '9999') < day]
     if not keys:
         return ''
-    return ('（到期没核实的%s是例外：别当成现在的事，聊着顺手问她一句还作不作数，她说还在就%s，说不在了就%s；'
-            '问一次就够，不追，没动静的递到面前满三个她在的日子自己归档。）'
+    return ('（%s到期没核实：聊着顺手问一句还作不作数，还在就%s，不在了就%s。）'
             % ('、'.join('「%s」' % k for k in keys), how[0], how[1]))
 
 
@@ -539,7 +545,7 @@ def render_pending_block(channel, write_hint='', due_how=('用 ctx_set 同键续
     lines = ['[背景刚有变化]']
     for x in pend:
         lines.append(_change_line(x, dropped=bool(x.get('dropped'))))
-    lines.append('（这是她这阵子的背景更新，用来避免说错话，不是话题。' + (write_hint or '') + '）')
+    lines.append('（她这阵子的背景，就着它说话。' + (write_hint or '') + '）')
     due = _due_note(pend, due_how)
     if due:
         lines.append(due)
@@ -585,8 +591,7 @@ def render_due_for_today():
     lines = ['【到期了，还没核实】']
     for x in due:
         lines.append('· %s：%s（复核日 %s）' % (x.get('key'), x.get('value'), x.get('recheck_after')))
-    lines.append('别当成现在的事。聊着顺手问她一句还作不作数：还在就 ctx_set 同键续上，不在了就 ctx_drop 扔掉。'
-                 '问一次就够，不追；没动静也不要紧，递到面前满三个她在的日子，它自己归档。')
+    lines.append('聊着顺手问一句还作不作数：还在就 ctx_set 同键续上，不在了就 ctx_drop。')
     return '\n'.join(lines)
 
 

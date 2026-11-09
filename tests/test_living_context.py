@@ -83,8 +83,12 @@ class Unverified(Base):
         lc.set_item('考试', '在准备期末', ttl_days=3)
         self.go(5)
         b = lc.render_breath_block()
-        self.assertIn('还没核实', b)
-        self.assertIn('满三个她在的日子', b)
+        self.assertIn('<unverified key="考试"', b)
+        self.assertIn('问一句还作不作数', b)                 # 只说该做什么
+        for words in ('别当成', '不是话题', '不追', '自己归档'):
+            self.assertNotIn(words, b)                        # 不说别做什么：那些在工具说明里
+        lc.set_item('考试')                                   # 她说还在：没有未核实的，那句就不带
+        self.assertNotIn('问一句', lc.render_breath_block())
 
     def test_none_keeps_it_hanging(self):
         lc.GRACE_DAYS = None
@@ -130,10 +134,12 @@ class Unverified(Base):
         self.go(5)
         snap = lc.render_snapshot()
         self.assertIn('考试（到期了，还没核实）', snap)
-        self.assertIn('满三个她在的日子', snap)
+        self.assertIn('「考试」到期没核实：聊着顺手问一句', snap)
         block = lc.render_pending_block('api')       # fresh→未核实的翻转会再挂一次
         self.assertIn('考试（到期了，还没核实）', block)
         self.assertIn('「考试」', block)
+        self.assertNotIn('不是话题', block)
+        self.assertNotIn('别当成', block)
 
 
 class Tombstones(Base):
